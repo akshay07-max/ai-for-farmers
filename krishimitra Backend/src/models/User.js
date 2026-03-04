@@ -93,13 +93,13 @@ const userSchema = new mongoose.Schema(
  * This means: even if someone gains access to your database,
  * they only see the hash, not the real password.
  */
-userSchema.pre("save", async function (next) {
+userSchema.pre("save", async function () {
   // Only run if passwordHash field was actually modified
-  if (!this.isModified("passwordHash")) return next();
+  if (!this.isModified("passwordHash")) return;
   // 12 = "cost factor" — higher = slower to crack (12 is industry standard)
   this.passwordHash = await bcrypt.hash(this.passwordHash, 12);
-  next();
 });
+
 
 // ── METHODS (functions available on every user document) ──
 
