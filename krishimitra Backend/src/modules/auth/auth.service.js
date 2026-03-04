@@ -1,6 +1,6 @@
-// ============================================================
-// AUTH SERVICE - Business logic for authentication
-// ============================================================
+// ================================================================
+// AUTH SERVICE — All authentication business logic
+// ================================================================
 const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
 const User = require("../../models/User");
@@ -9,91 +9,101 @@ const { redis } = require("../../config/redis");
 const { AppError } = require("../../middleware/errorHandler");
 const logger = require("../../utils/logger");
 
-// ---- TOKEN HELPERS ----
+// ── Token generators ─────────────────────────────────────────────
 
 /**
- * Generate a JWT access token (short-lived: 15 min)
+ * Creates a short-lived JWT access token (15 minutes by default).
+ * Contains userId and role so we don't need to hit the DB on every request.
  */
 const generateAccessToken = (userId, role) => {
-  return jwt.sign({ userId, role }, process.env.JWT_ACCESS_SECRET, {
-    expiresIn: process.env.JWT_ACCESS_EXPIRES || "15m",
-  });
+  return jwt.sign(
+    { userId: userId.toString(), role },
+    process.env.JWT_ACCESS_SECRET,
+    { expiresIn: process.env.JWT_ACCESS_EXPIRES || "15m" },
+  );
 };
 
 /**
- * Generate a refresh token (long-lived: 7 days)
- * We use a random UUID - not a JWT - for refresh tokens
- * This makes them easy to revoke from the database
+ * Creates a random UUID as a refresh token.
+ * We use UUID (not JWT) because it's easy to revoke from the database.
  */
 const generateRefreshToken = () => uuidv4();
 
-// ---- OTP HELPERS ----
+// ── OTP helpers ──────────────────────────────────────────────────
+
+/** Generate a random 6-digit OTP */
+const generateOTP = () =>
+  Math.floor(100000 + Math.random() * 900000).toString();
 
 /**
- * Generate a 6-digit OTP
- */
-const generateOTP = () => {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-};
-
-/**
- * Send OTP (in development: just log it, in production: use SMS provider)
+ * Send OTP to user's phone.
+ *
+ * In DEVELOPMENT: Just prints OTP to the terminal (no SMS needed).
+ * In PRODUCTION:  You would use Twilio or AWS SNS here.
  */
 const sendOTP = async (phone, otp) => {
-  if (process.env.NODE_ENV === "development") {
-    // In development, just print the OTP so you can use it for testing
-    logger.info(`=====================================`);
-    logger.info(`  OTP for ${phone}: ${otp}`);
-    logger.info(`  (Development mode - not sending SMS)`);
-    logger.info(`=====================================`);
-    return true;
+  if (process.env.NODE_ENV !== "production") {
+    logger.info("─────────────────────────────────");
+    logger.info(`  📱 OTP for ${phone}: ${otp}`);
+    logger.info("  ⚠️  DEV MODE — SMS not sent");
+    logger.info("─────────────────────────────────");
+    return;
   }
 
-  // TODO: In production, integrate Twilio or AWS SNS here
-  // Example with Twilio:
-  // const twilio = require('twilio')(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
+  // ── PRODUCTION: Integrate Twilio here ──
+  // Uncomment below and install: npm install twilio
+  //
+  // const twilio = require('twilio')(
+  //   process.env.TWILIO_ACCOUNT_SID,
+  //   process.env.TWILIO_AUTH_TOKEN
+  // );
   // await twilio.messages.create({
-  //   body: `Your KrishiMitra OTP is: ${otp}. Valid for 10 minutes.`,
-  //   from: process.env.TWILIO_PHONE,
-  //   to: `+91${phone}`,
+  //   body: `Your KrishiMitra OTP is: ${otp}. It expires in 10 minutes. Do not share it.`,
+  //   from: process.env.TWILIO_PHONE_NUMBER,
+  //   to:   `+91${phone}`,
   // });
-  return true;
 };
 
-// ---- AUTH OPERATIONS ----
+// ── Auth operations ──────────────────────────────────────────────
 
 /**
- * Register a new user
+ * REGISTER — Create a new user and send OTP for verification
  */
-const register = async (userData, meta = {}) => {
-  // Check if phone already exists
-  const existingUser = await User.findOne({ phone: userData.phone });
-  if (existingUser) {
-    throw new AppError("Phone number already registered.", 409, "ERR_AUTH_001");
+const register = async (data, meta = {}) => {
+  // Check if phone is already taken
+  const existing = await User.findOne({ phone: data.phone });
+  if (existing) {
+    throw new AppError(
+      "This phone number is already registered. Please login.",
+      409,
+      "ERR_AUTH_001",
+    );
   }
 
-  // Create user (password will be hashed by the model's pre-save hook)
+  // Create the user in MongoDB.
+  // Note: we store data.password as passwordHash — the model's pre-save hook
+  // will automatically hash it with bcrypt before saving.
   const user = await User.create({
-    name: userData.name,
-    phone: userData.phone,
-    passwordHash: userData.password, // Model hashes this automatically
-    role: userData.role,
-    village: userData.village,
-    district: userData.district,
-    state: userData.state,
-    pincode: userData.pincode,
-    languagePreference: userData.languagePreference,
+    name: data.name,
+    phone: data.phone,
+    passwordHash: data.password, // will be hashed automatically
+    role: data.role,
+    village: data.village,
+    district: data.district,
+    state: data.state,
+    pincode: data.pincode,
+    languagePreference: data.languagePreference,
   });
 
-  // Generate and store OTP in Redis (expires in 10 minutes)
+  // Generate OTP and save to Redis with 10-minute expiry
+  // Key format: otp:register:9876543210
   const otp = generateOTP();
-  const otpKey = `otp:register:${userData.phone}`;
+  const otpKey = `otp:register:${data.phone}`;
   await redis.set(otpKey, { otp, userId: user._id.toString() }, 10 * 60);
 
-  // Send OTP
-  await sendOTP(userData.phone, otp);
+  await sendOTP(data.phone, otp);
 
-  // Log this action
+  // Log this event
   await AuditLog.create({
     userId: user._id,
     action: "REGISTER",
@@ -107,15 +117,15 @@ const register = async (userData, meta = {}) => {
 };
 
 /**
- * Verify OTP (phone verification after registration)
+ * VERIFY OTP — Confirm phone number after registration
  */
 const verifyOtp = async (phone, otp) => {
-  const otpKey = `otp:register:${phone}`;
-  const stored = await redis.get(otpKey);
+  // Look up the OTP we stored in Redis
+  const stored = await redis.get(`otp:register:${phone}`);
 
   if (!stored) {
     throw new AppError(
-      "OTP expired or not found. Please register again.",
+      "OTP has expired or was not found. Please register again or request a new OTP.",
       400,
       "ERR_AUTH_002",
     );
@@ -123,7 +133,7 @@ const verifyOtp = async (phone, otp) => {
 
   if (stored.otp !== otp) {
     throw new AppError(
-      "Invalid OTP. Please check and try again.",
+      "Incorrect OTP. Please check and try again.",
       400,
       "ERR_AUTH_002",
     );
@@ -136,10 +146,9 @@ const verifyOtp = async (phone, otp) => {
     { new: true },
   );
 
-  // Delete used OTP from Redis
-  await redis.del(otpKey);
+  // Delete the OTP — it should only be usable once
+  await redis.del(`otp:register:${phone}`);
 
-  // Log this action
   await AuditLog.create({
     userId: user._id,
     action: "OTP_VERIFIED",
@@ -147,18 +156,19 @@ const verifyOtp = async (phone, otp) => {
     statusCode: 200,
   });
 
-  return { message: "Phone verified successfully" };
+  return { message: "Phone verified successfully! You can now login." };
 };
 
 /**
- * Login
+ * LOGIN — Authenticate and return tokens
  */
 const login = async ({ phone, password, fcmToken }, meta = {}) => {
-  // Find user - explicitly select passwordHash (it's hidden by default)
+  // Find user — must explicitly select passwordHash (hidden by default)
   const user = await User.findOne({ phone }).select(
     "+passwordHash +refreshTokens",
   );
 
+  // Use a generic error message — don't tell the attacker whether phone or password was wrong
   if (!user || !user.isActive) {
     throw new AppError(
       "Invalid phone number or password.",
@@ -167,7 +177,6 @@ const login = async ({ phone, password, fcmToken }, meta = {}) => {
     );
   }
 
-  // Check password
   const isPasswordValid = await user.isPasswordCorrect(password);
   if (!isPasswordValid) {
     throw new AppError(
@@ -177,9 +186,8 @@ const login = async ({ phone, password, fcmToken }, meta = {}) => {
     );
   }
 
-  // Check if verified
+  // Block unverified users and resend OTP
   if (!user.isVerified) {
-    // Re-send OTP
     const otp = generateOTP();
     await redis.set(
       `otp:register:${phone}`,
@@ -198,14 +206,13 @@ const login = async ({ phone, password, fcmToken }, meta = {}) => {
   const accessToken = generateAccessToken(user._id, user.role);
   const refreshToken = generateRefreshToken();
 
-  // Save refresh token to user's list (supports multi-device)
-  // Keep only last 5 refresh tokens (5 devices)
-  user.refreshTokens = [...(user.refreshTokens || []).slice(-4), refreshToken];
-  user.fcmToken = fcmToken || user.fcmToken;
+  // Store refresh token — keep last 5 (supports 5 devices simultaneously)
+  const existingTokens = user.refreshTokens || [];
+  user.refreshTokens = [...existingTokens.slice(-4), refreshToken];
+  if (fcmToken) user.fcmToken = fcmToken;
   user.lastLoginAt = new Date();
   await user.save();
 
-  // Log this action
   await AuditLog.create({
     userId: user._id,
     action: "LOGIN",
@@ -226,43 +233,44 @@ const login = async ({ phone, password, fcmToken }, meta = {}) => {
 };
 
 /**
- * Refresh access token
+ * REFRESH — Issue new tokens (token rotation for security)
  */
 const refreshAccessToken = async (refreshToken) => {
-  // Find user who has this refresh token
+  // Find the user who owns this refresh token
   const user = await User.findOne({ refreshTokens: refreshToken }).select(
     "+refreshTokens",
   );
 
   if (!user) {
     throw new AppError(
-      "Invalid refresh token. Please login again.",
+      "Invalid or expired session. Please login again.",
       401,
       "ERR_AUTH_004",
     );
   }
 
-  // Generate new tokens (token rotation - old refresh token is replaced)
+  // Generate brand new tokens
   const newAccessToken = generateAccessToken(user._id, user.role);
   const newRefreshToken = generateRefreshToken();
 
-  // Replace old refresh token with new one
-  user.refreshTokens = user.refreshTokens.filter((t) => t !== refreshToken);
-  user.refreshTokens.push(newRefreshToken);
+  // Rotate: remove old token, add new one
+  user.refreshTokens = user.refreshTokens
+    .filter((t) => t !== refreshToken)
+    .concat(newRefreshToken);
   await user.save();
 
   return { accessToken: newAccessToken, refreshToken: newRefreshToken };
 };
 
 /**
- * Logout
+ * LOGOUT — Invalidate tokens
  */
 const logout = async (userId, accessToken, refreshToken) => {
-  // Blacklist the current access token in Redis (until it expires naturally in 15 min)
-  const JWT_EXPIRY_SECONDS = 15 * 60; // 15 minutes
-  await redis.set(`blacklist:${accessToken}`, true, JWT_EXPIRY_SECONDS);
+  // Blacklist the access token in Redis until it would naturally expire (15 min)
+  // This prevents it being used even if someone has copied it
+  await redis.set(`blacklist:${accessToken}`, 1, 15 * 60);
 
-  // Remove the refresh token from user's list
+  // Remove the refresh token from the user's list in MongoDB
   if (refreshToken) {
     await User.findByIdAndUpdate(userId, {
       $pull: { refreshTokens: refreshToken },
@@ -270,23 +278,23 @@ const logout = async (userId, accessToken, refreshToken) => {
   }
 
   await AuditLog.create({
-    userId,
+    userId: userId,
     action: "LOGOUT",
     resource: "/auth/logout",
     statusCode: 200,
   });
-
-  return { message: "Logged out successfully" };
 };
 
 /**
- * Forgot password - send OTP
+ * FORGOT PASSWORD — Send OTP to reset password
  */
 const forgotPassword = async (phone) => {
   const user = await User.findOne({ phone, isActive: true });
+
+  // Security: always return the same message whether phone exists or not
+  // This prevents "phone enumeration" attacks
   if (!user) {
-    // Security: Don't reveal if phone exists or not
-    return { message: "If this number is registered, an OTP will be sent." };
+    return { message: "If this number is registered, an OTP has been sent." };
   }
 
   const otp = generateOTP();
@@ -303,27 +311,35 @@ const forgotPassword = async (phone) => {
     resource: "/auth/forgot-password",
   });
 
-  return { message: "If this number is registered, an OTP will be sent." };
+  return { message: "If this number is registered, an OTP has been sent." };
 };
 
 /**
- * Reset password
+ * RESET PASSWORD — Verify OTP and update password
  */
 const resetPassword = async ({ phone, otp, newPassword }) => {
   const stored = await redis.get(`otp:reset:${phone}`);
 
   if (!stored || stored.otp !== otp) {
-    throw new AppError("Invalid or expired OTP.", 400, "ERR_AUTH_002");
+    throw new AppError(
+      "Invalid or expired OTP. Please request a new one.",
+      400,
+      "ERR_AUTH_002",
+    );
   }
 
-  const user = await User.findById(stored.userId).select("+passwordHash");
+  const user = await User.findById(stored.userId).select(
+    "+passwordHash +refreshTokens",
+  );
   if (!user) throw new AppError("User not found.", 404, "ERR_NOT_FOUND");
 
-  user.passwordHash = newPassword; // Will be hashed by pre-save hook
-  // Invalidate all existing sessions
+  // Update password — the pre-save hook will hash it automatically
+  user.passwordHash = newPassword;
+  // Logout all devices by clearing all refresh tokens
   user.refreshTokens = [];
   await user.save();
 
+  // Delete the used OTP
   await redis.del(`otp:reset:${phone}`);
 
   await AuditLog.create({
