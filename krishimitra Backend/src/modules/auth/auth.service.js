@@ -6,7 +6,7 @@ const { v4: uuidv4 } = require("uuid");
 const User = require("../../models/User");
 const AuditLog = require("../../models/AuditLog");
 const { redis } = require("../../config/redis");
-const { AppError } = require("../../middleware/errorHandler");
+const { AppError } = require("../../middlewares/errorHandler");
 const logger = require("../../utils/logger");
 
 // ── Token generators ─────────────────────────────────────────────

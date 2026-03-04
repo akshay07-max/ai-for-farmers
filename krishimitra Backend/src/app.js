@@ -8,7 +8,7 @@ require("dotenv").config();
 
 // This package auto-catches async errors so we don't need
 // try-catch in every route handler. Must be required early.
-require("express-async-errors");
+// require("express-async-errors");
 
 const express = require("express");
 const cors = require("cors");
@@ -18,8 +18,8 @@ const compression = require("compression");
 
 const connectDB = require("./config/db");
 const { connectRedis } = require("./config/redis");
-const { errorHandler } = require("./middleware/errorHandler");
-const { apiLimiter } = require("./middleware/rateLimiter");
+const { errorHandler } = require("./middlewares/errorHandler");
+const { apiLimiter } = require("./middlewares/rateLimiter");
 const logger = require("./utils/logger");
 
 // Import all route modules
