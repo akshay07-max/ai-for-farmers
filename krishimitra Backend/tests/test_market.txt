@@ -1,0 +1,26 @@
+npm run dev
+```
+
+### 5. Test in order — these 3 calls, one after another
+
+**First — seed test data** (run this once so you have prices in the DB):
+```
+GET http://localhost:5000/api/v1/market/seed
+```
+You should see: `61 inserted, 0 updated`
+
+**Second — get crop list** (public, no token needed):
+```
+GET http://localhost:5000/api/v1/market/crops
+```
+
+**Third — login first to get your token**, then:
+```
+GET http://localhost:5000/api/v1/market/price?crop=onion&market=Lasalgaon
+Header: Authorization: Bearer YOUR_TOKEN
+
+GET http://localhost:5000/api/v1/market/history?crop=onion&market=Lasalgaon&days=30
+Header: Authorization: Bearer YOUR_TOKEN
+
+GET http://localhost:5000/api/v1/market/predict?crop=onion&market=Lasalgaon&days=7
+Header: Authorization: Bearer YOUR_TOKEN
