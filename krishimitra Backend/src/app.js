@@ -1,5 +1,5 @@
 // ================================================================
-// KRISHIMITRA AI — MAIN SERVER FILE
+// KRISHIMITRA AI — MAIN SERVER FILE (Step 3 update)
 // ================================================================
 require("dotenv").config();
 
@@ -11,6 +11,10 @@ const compression = require("compression");
 
 const connectDB = require("./config/db");
 const { connectRedis } = require("./config/redis");
+const { initTwilio } = require("./config/twilio");
+const { initFirebase } = require("./config/firebase");
+const { initRazorpay } = require("./config/razorpay");
+const { startCronJobs } = require("./jobs/index");
 const { errorHandler } = require("./middlewares/errorHandler");
 const { apiLimiter } = require("./middlewares/rateLimiter");
 const logger = require("./utils/logger");
@@ -18,14 +22,15 @@ const logger = require("./utils/logger");
 // ── Route modules ─────────────────────────────────────────────────
 const authRoutes = require("./modules/auth/auth.routes");
 const userRoutes = require("./modules/users/users.routes");
-const marketRoutes = require("./modules/market/market.routes"); // ← STEP 2: added
-// Upcoming steps (uncomment as we build each one):
+const marketRoutes = require("./modules/market/market.routes");
+const notifRoutes = require("./modules/notifications/notification.routes");
+const paymentRoutes = require("./modules/payments/payment.routes");
+// Upcoming:
 // const weatherRoutes  = require("./modules/weather/weather.routes");
 // const voiceRoutes    = require("./modules/voice/voice.routes");
 // const chatRoutes     = require("./modules/chat/chat.routes");
 // const cattleRoutes   = require("./modules/cattle/cattle.routes");
 // const learningRoutes = require("./modules/learning/learning.routes");
-// const notifRoutes    = require("./modules/notifications/notification.routes");
 // const adminRoutes    = require("./modules/admin/admin.routes");
 
 const app = express();
@@ -33,6 +38,15 @@ const app = express();
 // ── Connect databases ─────────────────────────────────────────────
 connectDB();
 connectRedis();
+
+// ── Initialize external services ─────────────────────────────────
+initTwilio(); // Real SMS
+initFirebase(); // Push notifications
+initRazorpay(); // Payments
+
+// ── Start background jobs (after DB is ready) ─────────────────────
+// Small delay to ensure DB connection is established first
+setTimeout(() => startCronJobs(), 3000);
 
 // ── Security ──────────────────────────────────────────────────────
 app.use(helmet());
@@ -54,7 +68,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 if (process.env.NODE_ENV !== "test") {
   app.use(
     morgan("combined", {
-      stream: { write: (message) => logger.info(message.trim()) },
+      stream: { write: (msg) => logger.info(msg.trim()) },
     }),
   );
 }
@@ -76,7 +90,9 @@ app.get("/health", (req, res) => {
 // ── API Routes ────────────────────────────────────────────────────
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/users", userRoutes);
-app.use("/api/v1/market", marketRoutes); // ← STEP 2: added
+app.use("/api/v1/market", marketRoutes);
+app.use("/api/v1/notifications", notifRoutes);
+app.use("/api/v1/payments", paymentRoutes);
 
 // ── 404 ───────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -87,7 +103,7 @@ app.use((req, res) => {
   });
 });
 
-// ── Global error handler (MUST be last) ──────────────────────────
+// ── Global error handler ──────────────────────────────────────────
 app.use(errorHandler);
 
 // ── Start server ──────────────────────────────────────────────────
@@ -104,7 +120,7 @@ if (require.main === module) {
   });
 
   process.on("SIGTERM", () => {
-    logger.info("SIGTERM received — shutting down gracefully...");
+    logger.info("SIGTERM — shutting down gracefully...");
     server.close(() => {
       logger.info("Server closed.");
       process.exit(0);
