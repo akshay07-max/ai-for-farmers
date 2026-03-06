@@ -1,0 +1,25 @@
+npm run dev
+```
+
+**Expected startup logs:**
+```
+✅ MongoDB connected
+✅ Redis connected
+✅ Twilio initialized
+✅ Firebase Admin initialized
+✅ Razorpay initialized
+✅ Cron jobs scheduled
+```
+
+**Test real SMS OTP:**
+```
+POST /api/v1/auth/register
+{ "name": "Test", "phone": "YOUR_VERIFIED_PHONE", "password": "Test@1234" }
+```
+→ Your phone rings with a real SMS within seconds.
+
+**Test payments:**
+```
+GET  /api/v1/payments/plans           (see all plans + pricing)
+POST /api/v1/payments/create-order    (needs JWT, body: {"plan":"PREMIUM","billing":"MONTHLY"})
+GET  /api/v1/notifications            (needs JWT — see your notification history)
