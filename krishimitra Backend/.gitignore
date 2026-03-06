@@ -6,3 +6,5 @@ node_modules/
 env
 
 krishimitra Backend/.env
+krishimitra Backend/ai-for-farmers-e16f0-firebase-adminsdk-fbsvc-ee13686d83.json
+krishimitra Backend/firebaseConfig.txt
